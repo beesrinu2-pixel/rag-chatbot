@@ -1,4 +1,5 @@
 import io
+import requests
 from typing import List, Dict, Any
 from pypdf import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -17,7 +18,7 @@ class EmbeddingFunctionWrapper:
 
 def extract_text_from_pdf(pdf_file) -> List[Dict[str, Any]]:
     """
-    Extracts text page by page from an uploaded PDF file stream.
+    Extracts text page by page from an uploaded or downloaded PDF stream.
     Returns a list of dicts: [{'page': 1, 'text': '...'}, ...]
     """
     reader = PdfReader(pdf_file)
@@ -32,6 +33,43 @@ def extract_text_from_pdf(pdf_file) -> List[Dict[str, Any]]:
                 "text": text
             })
     return extracted_pages
+
+def fetch_pdf_from_url(url: str) -> io.BytesIO:
+    """
+    Fetches raw bytes of a PDF file from a public URL or GitHub raw content URL.
+    """
+    response = requests.get(url, timeout=15)
+    response.raise_for_status()
+    return io.BytesIO(response.content)
+
+def list_github_repo_pdfs(repo_name: str, branch: str = "main") -> List[Dict[str, str]]:
+    """
+    Lists all PDF files in a public GitHub repository using the GitHub API.
+    Example repo_name: 'beesrinu2-pixel/rag-chatbot'
+    Returns: [{'name': 'doc.pdf', 'download_url': 'https://raw.githubusercontent.com/...'}, ...]
+    """
+    # Clean repo name
+    repo_name = repo_name.strip().strip("/")
+    if "github.com/" in repo_name:
+        repo_name = repo_name.split("github.com/")[-1].replace(".git", "")
+        
+    api_url = f"https://api.github.com/repos/{repo_name}/contents?ref={branch}"
+    try:
+        res = requests.get(api_url, timeout=10)
+        res.raise_for_status()
+        contents = res.json()
+        
+        pdf_files = []
+        if isinstance(contents, list):
+            for item in contents:
+                if item.get("type") == "file" and item.get("name", "").endswith(".pdf"):
+                    pdf_files.append({
+                        "name": item["name"],
+                        "download_url": item.get("download_url")
+                    })
+        return pdf_files
+    except Exception as e:
+        return []
 
 def chunk_pdf_pages(pages: List[Dict[str, Any]], chunk_size: int = 500, chunk_overlap: int = 100) -> List[Dict[str, Any]]:
     """
@@ -65,7 +103,6 @@ class RAGVectorDB:
     def __init__(self):
         self.client = chromadb.Client()
         self.embedding_fn = EmbeddingFunctionWrapper("all-MiniLM-L6-v2")
-        # Create or reset collection
         try:
             self.client.delete_collection("pdf_rag")
         except Exception:
@@ -113,11 +150,10 @@ class RAGVectorDB:
 
 def generate_answer_with_gemini(query: str, retrieved_chunks: List[Dict[str, Any]], api_key: str) -> str:
     """
-    Sends the retrieved context and user query to Google Gemini API to generate an answer with citations.
+    Sends retrieved context and query to Gemini API to generate an answer with citations.
     """
     genai.configure(api_key=api_key)
     
-    # Format context passages
     context_str = ""
     for idx, chunk in enumerate(retrieved_chunks, 1):
         context_str += f"\n--- Excerpt {idx} (Page {chunk['page']}) ---\n{chunk['text']}\n"
@@ -136,7 +172,6 @@ User Question: {query}
 
 Answer:"""
 
-    # Try gemini-1.5-flash or gemini-pro
     try:
         model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)

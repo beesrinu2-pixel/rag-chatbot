@@ -4,16 +4,32 @@ from typing import List, Dict, Any
 from pypdf import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import chromadb
+from chromadb.api.types import EmbeddingFunction, Documents, Embeddings
 from sentence_transformers import SentenceTransformer
 import google.generativeai as genai
 
-class EmbeddingFunctionWrapper:
-    """Wrapper to integrate SentenceTransformer with ChromaDB."""
+class EmbeddingFunctionWrapper(EmbeddingFunction):
+    """
+    SentenceTransformer wrapper fully compatible with ChromaDB 0.4.x and 0.5.x+
+    Implements __call__, embed_query, and embed_documents.
+    """
     def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
         self.model = SentenceTransformer(model_name)
 
-    def __call__(self, input: List[str]) -> List[List[float]]:
-        embeddings = self.model.encode(input)
+    def __call__(self, input: Documents) -> Embeddings:
+        embeddings = self.model.encode(list(input))
+        return embeddings.tolist()
+
+    def embed_query(self, input: Any) -> Embeddings:
+        if isinstance(input, str):
+            input_texts = [input]
+        else:
+            input_texts = list(input)
+        embeddings = self.model.encode(input_texts)
+        return embeddings.tolist()
+
+    def embed_documents(self, input: Documents) -> Embeddings:
+        embeddings = self.model.encode(list(input))
         return embeddings.tolist()
 
 def extract_text_from_pdf(pdf_file) -> List[Dict[str, Any]]:
@@ -48,7 +64,6 @@ def list_github_repo_pdfs(repo_name: str, branch: str = "main") -> List[Dict[str
     Example repo_name: 'beesrinu2-pixel/rag-chatbot'
     Returns: [{'name': 'doc.pdf', 'download_url': 'https://raw.githubusercontent.com/...'}, ...]
     """
-    # Clean repo name
     repo_name = repo_name.strip().strip("/")
     if "github.com/" in repo_name:
         repo_name = repo_name.split("github.com/")[-1].replace(".git", "")

@@ -166,6 +166,7 @@ class RAGVectorDB:
 def generate_answer_with_gemini(query: str, retrieved_chunks: List[Dict[str, Any]], api_key: str) -> str:
     """
     Sends retrieved context and query to Gemini API to generate an answer with citations.
+    Uses dynamic model discovery and fallback.
     """
     genai.configure(api_key=api_key)
     
@@ -187,14 +188,35 @@ User Question: {query}
 
 Answer:"""
 
-    try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
+    # Try standard supported Gemini models
+    candidate_models = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.0-flash-exp"]
+    
+    last_exception = None
+    for model_name in candidate_models:
         try:
-            model = genai.GenerativeModel("gemini-pro")
+            model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt)
-            return response.text
-        except Exception as err:
-            return f"Error contacting Gemini API: {str(err)}"
+            if response and hasattr(response, "text") and response.text:
+                return response.text
+        except Exception as e:
+            last_exception = e
+            continue
+
+    # Fallback: dynamically list available models for the user's API key
+    try:
+        available_models = genai.list_models()
+        for m in available_models:
+            if "generateContent" in getattr(m, "supported_generation_methods", []):
+                clean_name = m.name.replace("models/", "")
+                try:
+                    model = genai.GenerativeModel(clean_name)
+                    response = model.generate_content(prompt)
+                    if response and hasattr(response, "text") and response.text:
+                        return response.text
+                except Exception as inner_e:
+                    last_exception = inner_e
+                    continue
+    except Exception as list_err:
+        return f"Error contacting Gemini API: {str(list_err)}"
+        
+    return f"Error contacting Gemini API: {str(last_exception) if last_exception else 'No supported model found.'}"
